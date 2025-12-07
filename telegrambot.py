@@ -1,6 +1,7 @@
 import os
 import requests
 import asyncio
+import logging
 from xml.etree import ElementTree
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,9 +9,13 @@ from aiogram.filters import Command
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import web
 
+# --- Логи ---
+logging.basicConfig(level=logging.INFO)
+
+# --- Токен и вебхук ---
 API_TOKEN = '7763028058:AAGg_wZm0xDJXEI9i42Qlc6cm9tVqwdkjGY'
-WEBHOOK_PATH = f"/webhook/{API_TOKEN}" # путь webhook
-WEBHOOK_URL = f"https://bot_1763228205_2653_shecn.bothost.ru{WEBHOOK_PATH}" # укажи свой домен или субдомен
+WEBHOOK_PATH = f"/webhook/{API_TOKEN}"
+WEBHOOK_URL = f"https://bot_1763228205_2653_shecn.bothost.ru{WEBHOOK_PATH}"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -31,16 +36,20 @@ last_rates = {
 auto_users = set()
 
 
-# --- Получение курса из НБК ---
+# --- Получение курса ---
 def get_exchange_rate(currency_code="RUB"):
-    url = "https://nationalbank.kz/rss/rates_all.xml"
-    response = requests.get(url)
-    tree = ElementTree.fromstring(response.content)
-    for item in tree.findall(".//item"):
-        title = item.find("title").text
-        if title == currency_code:
-            rate = item.find("description").text
-            return float(rate.replace(",", "."))
+    try:
+        url = "https://nationalbank.kz/rss/rates_all.xml"
+        response = requests.get(url)
+        tree = ElementTree.fromstring(response.content)
+        for item in tree.findall(".//item"):
+            title = item.find("title").text
+            if title == currency_code:
+                rate = item.find("description").text
+                return float(rate.replace(",", "."))
+    except Exception as e:
+        logging.error(f"Ошибка при получении курса {currency_code}: {e}")
+        return None
 
 
 # --- Хендлеры ---
@@ -60,14 +69,20 @@ async def welcome(message: types.Message):
 async def show_rub(call: types.CallbackQuery):
     await call.answer()
     rate_rub = get_exchange_rate("RUB")
-    await call.message.answer(f"Курс рубля к тенге: {rate_rub}")
+    if rate_rub:
+        await call.message.answer(f"Курс рубля к тенге: {rate_rub}")
+    else:
+        await call.message.answer("Ошибка получения курса рубля.")
 
 
 @dp.callback_query(lambda c: c.data == 'show_kztusd')
 async def show_usd(call: types.CallbackQuery):
     await call.answer()
     rate_usd = get_exchange_rate("USD")
-    await call.message.answer(f"Курс доллара к тенге: {rate_usd}")
+    if rate_usd:
+        await call.message.answer(f"Курс доллара к тенге: {rate_usd}")
+    else:
+        await call.message.answer("Ошибка получения курса доллара.")
 
 
 @dp.callback_query(lambda c: c.data == 'enable_auto')
@@ -90,19 +105,22 @@ async def echo_message(message: types.Message):
 
 # --- Проверка изменения курса ---
 async def check_currency_changes():
+    logging.info("Авто-проверка курса запущена.")
     while True:
         try:
             for curr in ["RUB", "USD"]:
                 new_rate = get_exchange_rate(curr)
                 old_rate = last_rates[curr]
 
-                # Первое значение запоминаем, но не сравниваем
+                if new_rate is None:
+                    continue  # пропускаем, если не удалось получить курс
+
+                # Первое значение запоминаем
                 if old_rate is None:
                     last_rates[curr] = new_rate
                     continue
 
                 diff = abs(new_rate - old_rate)
-
                 if diff >= THRESHOLDS[curr]:
                     for user_id in auto_users:
                         await bot.send_message(
@@ -110,31 +128,36 @@ async def check_currency_changes():
                             f"⚠️ Курс {curr} резко изменился!\n"
                             f"Было: {old_rate}\nСтало: {new_rate}\nРазница: {diff}"
                         )
-
                 last_rates[curr] = new_rate
 
         except Exception as e:
-            print("Ошибка в авто-проверке:", e)
+            logging.error(f"Ошибка в авто-проверке: {e}")
 
-        await asyncio.sleep(3600)  # проверка каждые 3600 секунд (Час)
+        await asyncio.sleep(3600)  # проверка каждый час
 
 
 # --- Webhook ---
 async def on_startup(app):
     await bot.set_webhook(WEBHOOK_URL)
-    asyncio.create_task(check_currency_changes())  # запускаем проверку
+    # Запуск фоновой задачи корректно на Bothost
+    app['currency_task'] = asyncio.create_task(check_currency_changes())
+    logging.info("Фоновая задача проверки курса запущена.")
 
 
 async def on_shutdown(app):
     await bot.delete_webhook()
+    if 'currency_task' in app:
+        app['currency_task'].cancel()
     await bot.session.close()
+    logging.info("Бот остановлен.")
 
 
-# --- Aiohttp сервер ---
+# --- Сервер aiohttp ---
 app = web.Application()
 SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
 app.on_startup.append(on_startup)
 app.on_cleanup.append(on_shutdown)
+
 
 # --- Запуск ---
 if __name__ == "__main__":
