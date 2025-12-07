@@ -128,8 +128,8 @@ async def check_currency_changes():
 async def main():
     # Запуск фоновой задачи
     asyncio.create_task(check_currency_changes())
-    from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+    # Запуск polling без executor
+    await dp.start_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
