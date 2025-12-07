@@ -6,24 +6,19 @@ from xml.etree import ElementTree
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler
-from aiohttp import web
 
 # --- Логи ---
 logging.basicConfig(level=logging.INFO)
 
-# --- Токен и вебхук ---
+# --- Токен бота ---
 API_TOKEN = '7763028058:AAGg_wZm0xDJXEI9i42Qlc6cm9tVqwdkjGY'
-WEBHOOK_PATH = f"/webhook/{API_TOKEN}"
-WEBHOOK_URL = f"https://bot_1763228205_2653_shecn.bothost.ru{WEBHOOK_PATH}"
-
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 # --- Пороговые значения ---
 THRESHOLDS = {
-    "RUB": 0.05,   # 5 копеек
-    "USD": 5       # 5 тенге
+    "RUB": 0.05,
+    "USD": 5
 }
 
 # Последние значения курсов
@@ -32,9 +27,8 @@ last_rates = {
     "USD": None
 }
 
-# Пользователи, которым включены авто-уведомления
+# Пользователи с включенными авто-уведомлениями
 auto_users = set()
-
 
 # --- Получение курса ---
 def get_exchange_rate(currency_code="RUB"):
@@ -51,7 +45,6 @@ def get_exchange_rate(currency_code="RUB"):
         logging.error(f"Ошибка при получении курса {currency_code}: {e}")
         return None
 
-
 # --- Хендлеры ---
 @dp.message(Command("start"))
 async def welcome(message: types.Message):
@@ -59,31 +52,29 @@ async def welcome(message: types.Message):
         inline_keyboard=[
             [InlineKeyboardButton(text='Рубль к тенге', callback_data='show_kztrub')],
             [InlineKeyboardButton(text='Доллар к тенге', callback_data='show_kztusd')],
-            [InlineKeyboardButton(text='Включить авто-уведомления', callback_data='enable_auto')]
+            [InlineKeyboardButton(text='Включить авто-уведомления', callback_data='enable_auto')],
+            [InlineKeyboardButton(text='Выключить авто-уведомления', callback_data='disable_auto')]
         ]
     )
     await message.answer("Получить курс:", reply_markup=markup)
 
-
 @dp.callback_query(lambda c: c.data == 'show_kztrub')
 async def show_rub(call: types.CallbackQuery):
     await call.answer()
-    rate_rub = get_exchange_rate("RUB")
-    if rate_rub:
-        await call.message.answer(f"Курс рубля к тенге: {rate_rub}")
+    rate = get_exchange_rate("RUB")
+    if rate:
+        await call.message.answer(f"Курс рубля к тенге: {rate}")
     else:
         await call.message.answer("Ошибка получения курса рубля.")
-
 
 @dp.callback_query(lambda c: c.data == 'show_kztusd')
 async def show_usd(call: types.CallbackQuery):
     await call.answer()
-    rate_usd = get_exchange_rate("USD")
-    if rate_usd:
-        await call.message.answer(f"Курс доллара к тенге: {rate_usd}")
+    rate = get_exchange_rate("USD")
+    if rate:
+        await call.message.answer(f"Курс доллара к тенге: {rate}")
     else:
         await call.message.answer("Ошибка получения курса доллара.")
-
 
 @dp.callback_query(lambda c: c.data == 'enable_auto')
 async def enable_auto(call: types.CallbackQuery):
@@ -91,19 +82,17 @@ async def enable_auto(call: types.CallbackQuery):
     await call.answer("Авто-уведомления включены!")
     await call.message.answer("Теперь бот будет присылать уведомления при резких изменениях курса.")
 
-
-@dp.message(Command("auto_off"))
-async def auto_off(message: types.Message):
-    auto_users.discard(message.from_user.id)
-    await message.answer("Авто-уведомления отключены.")
-
+@dp.callback_query(lambda c: c.data == 'disable_auto')
+async def disable_auto(call: types.CallbackQuery):
+    auto_users.discard(call.from_user.id)
+    await call.answer("Авто-уведомления отключены!")
+    await call.message.answer("Авто-уведомления отключены.")
 
 @dp.message(lambda message: True)
 async def echo_message(message: types.Message):
     await message.answer(message.text)
 
-
-# --- Проверка изменения курса ---
+# --- Фоновая задача проверки курса ---
 async def check_currency_changes():
     logging.info("Авто-проверка курса запущена.")
     while True:
@@ -113,9 +102,8 @@ async def check_currency_changes():
                 old_rate = last_rates[curr]
 
                 if new_rate is None:
-                    continue  # пропускаем, если не удалось получить курс
+                    continue
 
-                # Первое значение запоминаем
                 if old_rate is None:
                     last_rates[curr] = new_rate
                     continue
@@ -128,6 +116,7 @@ async def check_currency_changes():
                             f"⚠️ Курс {curr} резко изменился!\n"
                             f"Было: {old_rate}\nСтало: {new_rate}\nРазница: {diff}"
                         )
+
                 last_rates[curr] = new_rate
 
         except Exception as e:
@@ -135,30 +124,12 @@ async def check_currency_changes():
 
         await asyncio.sleep(3600)  # проверка каждый час
 
+# --- Запуск бота через long polling ---
+async def main():
+    # Запуск фоновой задачи
+    asyncio.create_task(check_currency_changes())
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
 
-# --- Webhook ---
-async def on_startup(app):
-    await bot.set_webhook(WEBHOOK_URL)
-    # Запуск фоновой задачи корректно на Bothost
-    app['currency_task'] = asyncio.create_task(check_currency_changes())
-    logging.info("Фоновая задача проверки курса запущена.")
-
-
-async def on_shutdown(app):
-    await bot.delete_webhook()
-    if 'currency_task' in app:
-        app['currency_task'].cancel()
-    await bot.session.close()
-    logging.info("Бот остановлен.")
-
-
-# --- Сервер aiohttp ---
-app = web.Application()
-SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-app.on_startup.append(on_startup)
-app.on_cleanup.append(on_shutdown)
-
-
-# --- Запуск ---
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+    asyncio.run(main())
