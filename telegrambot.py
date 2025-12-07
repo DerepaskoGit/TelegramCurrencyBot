@@ -1,4 +1,3 @@
-import os
 import requests
 import asyncio
 import logging
@@ -7,30 +6,24 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 
-# --- Логи ---
 logging.basicConfig(level=logging.INFO)
 
-# --- Токен бота ---
 API_TOKEN = '7763028058:AAGg_wZm0xDJXEI9i42Qlc6cm9tVqwdkjGY'
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot=bot)  # Важно: привязываем бот к Dispatcher
 
-# --- Пороговые значения ---
 THRESHOLDS = {
     "RUB": 0.05,
     "USD": 5
 }
 
-# Последние значения курсов
 last_rates = {
     "RUB": None,
     "USD": None
 }
 
-# Пользователи с включенными авто-уведомлениями
 auto_users = set()
 
-# --- Получение курса ---
 def get_exchange_rate(currency_code="RUB"):
     try:
         url = "https://nationalbank.kz/rss/rates_all.xml"
@@ -45,7 +38,6 @@ def get_exchange_rate(currency_code="RUB"):
         logging.error(f"Ошибка при получении курса {currency_code}: {e}")
         return None
 
-# --- Хендлеры ---
 @dp.message(Command("start"))
 async def welcome(message: types.Message):
     markup = InlineKeyboardMarkup(
@@ -92,7 +84,6 @@ async def disable_auto(call: types.CallbackQuery):
 async def echo_message(message: types.Message):
     await message.answer(message.text)
 
-# --- Фоновая задача проверки курса ---
 async def check_currency_changes():
     logging.info("Авто-проверка курса запущена.")
     while True:
@@ -124,12 +115,9 @@ async def check_currency_changes():
 
         await asyncio.sleep(3600)  # проверка каждый час
 
-# --- Запуск бота через long polling ---
 async def main():
-    # Запуск фоновой задачи
     asyncio.create_task(check_currency_changes())
-    # Запуск polling без executor
-    await dp.start_polling()
+    await dp.start_polling()  # polling в Aiogram 3.x
 
 if __name__ == "__main__":
     asyncio.run(main())
